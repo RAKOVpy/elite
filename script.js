@@ -31,13 +31,20 @@ if (slider && partnersList) {
     // Дублируем логотипы, чтобы прокрутка была бесшовной (зацикленной):
     // как только первый набор ушёл влево, его место занимает точная копия.
     let originalItems = Array.from(partnersList.children);
-    let firstClone = null;
-    for (let item of originalItems) {
-        let clone = item.cloneNode(true);
-        clone.setAttribute('aria-hidden', 'true'); // копии не нужны скринридерам
-        partnersList.appendChild(clone);
-        if (!firstClone) firstClone = clone;
+
+    function appendSet() {
+        let frag = document.createDocumentFragment();
+        for (let item of originalItems) {
+            let clone = item.cloneNode(true);
+            clone.setAttribute('aria-hidden', 'true'); // копии не нужны скринридерам
+            frag.appendChild(clone);
+        }
+        partnersList.appendChild(frag);
     }
+
+    // Первая копия нужна и для бесшовности, и чтобы замерить ширину набора.
+    appendSet();
+    let firstClone = partnersList.children[originalItems.length];
 
     // Ширина одного полного набора логотипов — на неё зацикливаем прокрутку.
     // Считаем как расстояние между первым оригиналом и его первой копией,
@@ -45,6 +52,15 @@ if (slider && partnersList) {
     let singleWidth = 0;
     function measure() {
         singleWidth = firstClone.offsetLeft - originalItems[0].offsetLeft;
+        // При отдалении (масштаб < 100%) экран в CSS-пикселях становится шире
+        // одного набора — тогда у края появился бы разрыв. Докидываем копии,
+        // пока ленты не хватает, чтобы перекрыть экран плюс запас в один набор.
+        if (singleWidth > 0) {
+            let guard = 0;
+            while (partnersList.scrollWidth < slider.clientWidth + singleWidth && guard++ < 40) {
+                appendSet();
+            }
+        }
     }
     measure();
     window.addEventListener('resize', measure);
@@ -53,16 +69,21 @@ if (slider && partnersList) {
         document.fonts.ready.then(measure); // шрифт Roboto подгружается асинхронно
     }
 
-    // Держим scrollLeft в пределах одного набора — за счёт копий это выглядит
+    // Держим позицию в пределах одного набора — за счёт копий это выглядит
     // как бесконечная лента и работает в обе стороны (в т.ч. при перетаскивании назад).
-    function normalizeScroll() {
-        if (singleWidth <= 0) return;
-        if (slider.scrollLeft >= singleWidth) {
-            slider.scrollLeft -= singleWidth;
-        } else if (slider.scrollLeft <= 0) {
-            slider.scrollLeft += singleWidth;
-        }
+    function wrap(p) {
+        if (singleWidth <= 0) return p;
+        p %= singleWidth;
+        if (p < 0) p += singleWidth;
+        return p;
     }
+
+    // Своя дробная позиция ленты — источник правды для прокрутки.
+    // Важно: браузер при масштабе меньше 100% округляет scrollLeft до целых
+    // device-пикселей. Если каждый кадр читать scrollLeft обратно и прибавлять
+    // ~0.6px, прибавка «съедается» округлением и лента стоит. Поэтому копим
+    // позицию сами, а в scrollLeft только пишем — тогда сдвиги накапливаются.
+    let pos = slider.scrollLeft || 0;
 
     let isDragging = false; // тянем мышкой (или пальцем) — на это время автопрокрутка на паузе
     let lastX = 0;
@@ -70,9 +91,9 @@ if (slider && partnersList) {
     // Цикл автопрокрутки: пока не перетаскиваем — плавно двигаем ленту.
     function tick() {
         if (!isDragging) {
-            slider.scrollLeft += AUTO_SPEED;
+            pos = wrap(pos + AUTO_SPEED);
+            slider.scrollLeft = pos;
         }
-        normalizeScroll();
         requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
@@ -81,6 +102,7 @@ if (slider && partnersList) {
     slider.addEventListener('mousedown', (e) => {
         isDragging = true;              // останавливаем автопрокрутку
         slider.classList.add('active');
+        pos = slider.scrollLeft;        // синхронизируемся с текущей позицией
         lastX = e.pageX;
         e.preventDefault();             // не выделяем текст и не тащим элементы
     });
@@ -92,8 +114,8 @@ if (slider && partnersList) {
         // поэтому бесшовный перескок через край не сбивает позицию.
         const delta = (e.pageX - lastX) * DRAG_SPEED;
         lastX = e.pageX;
-        slider.scrollLeft -= delta;
-        normalizeScroll();
+        pos = wrap(pos - delta);
+        slider.scrollLeft = pos;
     });
 
     function stopDrag() {
@@ -107,8 +129,14 @@ if (slider && partnersList) {
     // --- Пальцем на тач-устройствах: даём нативной прокрутке работать,
     // а автопрокрутку ставим на паузу, чтобы она не мешала свайпу. ---
     slider.addEventListener('touchstart', () => { isDragging = true; }, { passive: true });
-    slider.addEventListener('touchend', () => { isDragging = false; });
-    slider.addEventListener('touchcancel', () => { isDragging = false; });
+    slider.addEventListener('touchend', () => {
+        pos = slider.scrollLeft;        // продолжаем с того места, куда домотали пальцем
+        isDragging = false;
+    });
+    slider.addEventListener('touchcancel', () => {
+        pos = slider.scrollLeft;
+        isDragging = false;
+    });
 }
 
 // Плавная прокрутка к разделам по клику в шапке
