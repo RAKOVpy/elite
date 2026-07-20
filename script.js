@@ -87,12 +87,20 @@ if (slider && partnersList) {
 
     let isDragging = false; // тянем мышкой (или пальцем) — на это время автопрокрутка на паузе
     let lastX = 0;
+    let inertia = 0;        // остаточная скорость после броска пальцем (px/кадр), плавно затухает
+    const FRICTION = 0.94;  // насколько гасим инерцию каждый кадр
+    const MAX_INERTIA = 40; // ограничиваем силу броска, чтобы лента не «выстреливала»
 
     // Цикл автопрокрутки: пока не перетаскиваем — плавно двигаем ленту.
+    // К базовой скорости добавляем затухающую инерцию от свайпа.
     function tick() {
         if (!isDragging) {
-            pos = wrap(pos + AUTO_SPEED);
+            pos = wrap(pos + AUTO_SPEED + inertia);
             slider.scrollLeft = pos;
+            if (inertia !== 0) {
+                inertia *= FRICTION;
+                if (Math.abs(inertia) < 0.05) inertia = 0;
+            }
         }
         requestAnimationFrame(tick);
     }
@@ -126,17 +134,67 @@ if (slider && partnersList) {
     slider.addEventListener('mouseup', stopDrag);
     slider.addEventListener('mouseleave', stopDrag);
 
-    // --- Пальцем на тач-устройствах: даём нативной прокрутке работать,
-    // а автопрокрутку ставим на паузу, чтобы она не мешала свайпу. ---
-    slider.addEventListener('touchstart', () => { isDragging = true; }, { passive: true });
-    slider.addEventListener('touchend', () => {
-        pos = slider.scrollLeft;        // продолжаем с того места, куда домотали пальцем
-        isDragging = false;
-    });
-    slider.addEventListener('touchcancel', () => {
-        pos = slider.scrollLeft;
-        isDragging = false;
-    });
+    // --- Пальцем на тач-устройствах ---
+    // Раньше здесь работала нативная прокрутка. Проблема: после быстрого свайпа
+    // браузер продолжает инерционную прокрутку, а наш цикл в тот же момент пишет
+    // в scrollLeft — два «хозяина» у одной прокрутки дерутся, из-за чего на стыке
+    // появлялась призрачная копия и лента дёргалась. Поэтому берём горизонтальный
+    // жест полностью на себя (CSS touch-action: pan-y отключает нативную
+    // горизонтальную прокрутку, вертикальный скролл страницы остаётся), а инерцию
+    // считаем сами — тогда у прокрутки один источник правды и стык бесшовный.
+    const TOUCH_DRAG_SPEED = 1;     // палец ведёт ленту 1:1
+    let touchStartX = 0, touchStartY = 0;
+    let touchLastX = 0, touchLastT = 0;
+    let touchVX = 0;                // скорость пальца, px/мс
+    let axis = null;                // 'x' — крутим ленту, 'y' — отдаём странице
+
+    slider.addEventListener('touchstart', (e) => {
+        const t = e.touches[0];
+        isDragging = true;          // пауза автопрокрутки и инерции
+        inertia = 0;
+        pos = slider.scrollLeft;    // синхронизируемся с текущей позицией
+        touchStartX = touchLastX = t.pageX;
+        touchStartY = t.pageY;
+        touchLastT = performance.now();
+        touchVX = 0;
+        axis = null;
+    }, { passive: true });
+
+    slider.addEventListener('touchmove', (e) => {
+        const t = e.touches[0];
+        if (axis === null) {
+            // Определяем направление жеста по первому заметному смещению
+            const adx = Math.abs(t.pageX - touchStartX);
+            const ady = Math.abs(t.pageY - touchStartY);
+            if (adx < 6 && ady < 6) return;
+            axis = adx > ady ? 'x' : 'y';
+            if (axis === 'y') { isDragging = false; return; } // вертикаль — скроллим страницу
+        }
+        if (axis !== 'x') return;
+        e.preventDefault();         // забираем горизонтальный жест себе
+        const now = performance.now();
+        const dt = Math.max(now - touchLastT, 8);
+        const move = (t.pageX - touchLastX) * TOUCH_DRAG_SPEED;
+        pos = wrap(pos - move);
+        slider.scrollLeft = pos;
+        touchVX = -move / dt;       // px/мс; знак: палец вправо -> pos уменьшается
+        touchLastX = t.pageX;
+        touchLastT = now;
+    }, { passive: false });
+
+    function endTouch() {
+        if (axis === 'x') {
+            // Если перед отпусканием палец стоял на месте — броска нет.
+            const idle = performance.now() - touchLastT;
+            inertia = idle > 60 ? 0 : touchVX * 16.7; // px/мс -> px/кадр (~60fps)
+            if (inertia > MAX_INERTIA) inertia = MAX_INERTIA;
+            if (inertia < -MAX_INERTIA) inertia = -MAX_INERTIA;
+        }
+        axis = null;
+        isDragging = false;         // автопрокрутка + затухающая инерция снова работают
+    }
+    slider.addEventListener('touchend', endTouch);
+    slider.addEventListener('touchcancel', endTouch);
 }
 
 // Плавная прокрутка к разделам по клику в шапке
