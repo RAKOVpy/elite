@@ -20,39 +20,96 @@ for (let benefitsItem of benefitsItems) {
     })
 }
 
+// ===== Карусель «НАМ ДОВЕРЯЮТ»: бесконечная автопрокрутка + перетаскивание мышью =====
 let slider = document.querySelector('.partners-container');
-let isDown = false;
-let startX;
-let scrollLeft;
+let partnersList = slider ? slider.querySelector('.partners-list') : null;
 
-slider.addEventListener('mousedown', (e) => {
-    isDown = true;
-    slider.classList.add('active');
-    // Высчитываем стартовую позицию курсора мыши относительно контейнера
-    startX = e.pageX - slider.offsetLeft;
-    // Запоминаем, на сколько изначально был прокручен контейнер
-    scrollLeft = slider.scrollLeft;
-});
+if (slider && partnersList) {
+    const AUTO_SPEED = 0.6;   // пикселей за кадр — скорость автопрокрутки
+    const DRAG_SPEED = 1.5;   // множитель скорости перетаскивания
 
-slider.addEventListener('mouseleave', () => {
-    isDown = false;
-});
+    // Дублируем логотипы, чтобы прокрутка была бесшовной (зацикленной):
+    // как только первый набор ушёл влево, его место занимает точная копия.
+    let originalItems = Array.from(partnersList.children);
+    let firstClone = null;
+    for (let item of originalItems) {
+        let clone = item.cloneNode(true);
+        clone.setAttribute('aria-hidden', 'true'); // копии не нужны скринридерам
+        partnersList.appendChild(clone);
+        if (!firstClone) firstClone = clone;
+    }
 
-slider.addEventListener('mouseup', () => {
-    isDown = false;
-});
+    // Ширина одного полного набора логотипов — на неё зацикливаем прокрутку.
+    // Считаем как расстояние между первым оригиналом и его первой копией,
+    // чтобы не зависеть от отступов и внутренней геометрии.
+    let singleWidth = 0;
+    function measure() {
+        singleWidth = firstClone.offsetLeft - originalItems[0].offsetLeft;
+    }
+    measure();
+    window.addEventListener('resize', measure);
+    window.addEventListener('load', measure);
+    if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(measure); // шрифт Roboto подгружается асинхронно
+    }
 
-slider.addEventListener('mousemove', (e) => {
-    if (!isDown) return; // Если мышка не зажата, ничего не делаем
-    e.preventDefault(); // Отменяем стандартные события браузера (например, случайный переход по ссылке)
+    // Держим scrollLeft в пределах одного набора — за счёт копий это выглядит
+    // как бесконечная лента и работает в обе стороны (в т.ч. при перетаскивании назад).
+    function normalizeScroll() {
+        if (singleWidth <= 0) return;
+        if (slider.scrollLeft >= singleWidth) {
+            slider.scrollLeft -= singleWidth;
+        } else if (slider.scrollLeft <= 0) {
+            slider.scrollLeft += singleWidth;
+        }
+    }
 
-    // Считаем текущую позицию мыши и пройденное расстояние
-    const x = e.pageX - slider.offsetLeft;
-    const walk = (x - startX) * 2; // Умножаем на 2 для ускорения скролла (скорость можно менять)
+    let isDragging = false; // тянем мышкой (или пальцем) — на это время автопрокрутка на паузе
+    let lastX = 0;
 
-    // Двигаем скролл контейнера
-    slider.scrollLeft = scrollLeft - walk;
-});
+    // Цикл автопрокрутки: пока не перетаскиваем — плавно двигаем ленту.
+    function tick() {
+        if (!isDragging) {
+            slider.scrollLeft += AUTO_SPEED;
+        }
+        normalizeScroll();
+        requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+
+    // --- Перетаскивание мышью ---
+    slider.addEventListener('mousedown', (e) => {
+        isDragging = true;              // останавливаем автопрокрутку
+        slider.classList.add('active');
+        lastX = e.pageX;
+        e.preventDefault();             // не выделяем текст и не тащим элементы
+    });
+
+    slider.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        e.preventDefault();
+        // Двигаем ленту вслед за курсором: считаем сдвиг относительно прошлого кадра,
+        // поэтому бесшовный перескок через край не сбивает позицию.
+        const delta = (e.pageX - lastX) * DRAG_SPEED;
+        lastX = e.pageX;
+        slider.scrollLeft -= delta;
+        normalizeScroll();
+    });
+
+    function stopDrag() {
+        if (!isDragging) return;
+        isDragging = false;             // отпустили мышь — лента снова крутится
+        slider.classList.remove('active');
+    }
+    slider.addEventListener('mouseup', stopDrag);
+    slider.addEventListener('mouseleave', stopDrag);
+
+    // --- Пальцем на тач-устройствах: даём нативной прокрутке работать,
+    // а автопрокрутку ставим на паузу, чтобы она не мешала свайпу. ---
+    slider.addEventListener('touchstart', () => { isDragging = true; }, { passive: true });
+    slider.addEventListener('touchend', () => { isDragging = false; });
+    slider.addEventListener('touchcancel', () => { isDragging = false; });
+}
 
 // Плавная прокрутка к разделам по клику в шапке
 let navLinks = document.querySelectorAll('.navigation-item a');

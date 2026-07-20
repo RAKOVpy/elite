@@ -571,6 +571,7 @@ h1 {
     overflow-x: auto;
     white-space: nowrap; /* Запрещаем карточкам переноситься на новую строку */
     user-select: none; /* Запрещаем выделение текста при перетаскивании */
+    cursor: grab; /* Показываем, что ленту можно тянуть мышкой */
 
     padding: 50px 16px;
 
@@ -582,6 +583,10 @@ h1 {
 
 .partners-container::-webkit-scrollbar {
     display: none;
+}
+
+.partners-container.active {
+    cursor: grabbing; /* Пока тянем — курсор «зажатой руки» */
 }
 
 .partners-list {
